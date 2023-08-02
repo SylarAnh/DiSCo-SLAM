@@ -48,7 +48,7 @@
 #include <mutex>
 
 inline gtsam::Pose3_ transformTo(const gtsam::Pose3_& x, const gtsam::Pose3_& p) {
-    return gtsam::Pose3_(x, &gtsam::Pose3::transform_pose_to, p);
+    return gtsam::Pose3_(x, &gtsam::Pose3::transformPoseTo, p);
 }
 
 sensor_msgs::PointCloud2 publishCloud(ros::Publisher *thisPub, pcl::PointCloud<PointType>::Ptr thisCloud, ros::Time thisStamp, std::string thisFrame)
@@ -184,11 +184,12 @@ private:
 
     std::vector<std::pair<string, double>> _processing_time_list;
 public:
-
+ 
     MapFusion(){
+        // 加载参数和初始化
         ParamLoader();
         initialization();
-
+        // 信号标记
         _sub_communication_signal = nh.subscribe<std_msgs::Bool>(_robot_id + "/lio_sam/signal",
                  100, &MapFusion::communicationSignalHandler, this, ros::TransportHints().tcpNoDelay());
 
@@ -197,13 +198,15 @@ public:
         _sub_signal_2 = nh.subscribe<std_msgs::Bool>(_signal_id_2 + "/lio_sam/signal",
                  100, &MapFusion::signalHandler2, this, ros::TransportHints().tcpNoDelay());
 
+        // 计算点云的描述子并发布，收听的是当前机器人的cloudinfo信息
         _sub_laser_cloud_info = nh.subscribe<lio_sam::cloud_info>(_robot_id + "/" + _local_topic,
                 1, &MapFusion::laserCloudInfoHandler, this, ros::TransportHints().tcpNoDelay());
 
+        // 把当前机器人相关的描述子信息转发出去，topic加上id
         _sub_loop_info_global = nh.subscribe<lio_sam::context_info>(_sc_topic + "/loop_info_global",
                             100, &MapFusion::globalLoopInfoHandler, this, ros::TransportHints().tcpNoDelay());
 
-
+        // 不是0机器人都执行下步
         if(_robot_id != _robot_initial){
             _sub_scan_context_info = nh.subscribe<lio_sam::context_info>(_sc_topic + "/context_info",
                 20, &MapFusion::scanContextInfoHandler, this, ros::TransportHints().tcpNoDelay());//number of buffer may differs for different robot numbers
@@ -661,15 +664,17 @@ private:
         //build
 
         buildKDTree(bin);
-        KNNSearch(bin);
+        KNNSearch(bin); // 函数调用完之后 _idx_nearest_list 中会存储匹配成功的机器人id对
 
         if(_idx_nearest_list.empty() && _use_position_search)
             distanceSearch(bin);
 
+        // 在_bin_with_id里面找到最近的bin与当前bin中的点云进行icp匹配， 结果保存在 _pose_queue _loop_queue
         if(!getInitialGuesses(bin)){
             return;
         }
 
+        // 求解最大团问题过滤外点 结果保存在 _loop_accept_queue
         if(!incrementalPCM()){
             return;
         }
@@ -749,6 +754,7 @@ private:
 
     }
 
+    // 构建kdtree，
     void buildKDTree(ScanContextBin bin){
         _num_bin++;
         //store data received
@@ -801,10 +807,11 @@ private:
             if ( bin.robotname == _bin_with_id.at(idx_candidate).robotname)
                 continue;
 
-            // if the matching pair have nothing to do with the present robot, skip
+            // if the matching pair have nothing to do with the present robot, skip 与当前机器人无关跳过
             if ( bin.robotname != _robot_id && _bin_with_id.at(idx_candidate).robotname != _robot_id)
                 continue;
 
+            // 这里看不懂了
             if( robotID2Number(bin.robotname) >= _robot_id_th && robotID2Number(_bin_with_id.at(idx_candidate).robotname) >= _robot_id_th)
                 continue;
 
@@ -851,7 +858,7 @@ private:
         PointTypePose source_pose_initial, target_pose;
 
         float sc_pitch = (min_idx+1) * M_PI * 2 /_num_sectors;
-        if (sc_pitch > M_PI)
+        if (sc_pitch > M_PI) // 转到-pi到pi的区间
             sc_pitch -= (M_PI * 2);
 
         int robot_id_this = robotID2Number(bin.robotname);
@@ -914,7 +921,7 @@ private:
         PointTypePose pose_source_lidar = icpRelativeMotion(transformPointCloud(bin.cloud, &source_pose_initial),
                                                             transformPointCloud(bin_nearest.cloud, &target_pose), source_pose_initial);
 
-        if (pose_source_lidar.intensity == -1 || pose_source_lidar.intensity > _icp_thres)
+        if (pose_source_lidar.intensity == -1 || pose_source_lidar.intensity > _icp_thres) // intensity 是匹配度评分
             return false;
 
         //1: jackal0, 2: jackal1
@@ -931,6 +938,7 @@ private:
                   gtsam::Point3(target_pose.x, target_pose.y, target_pose.z));
 
         auto ite = _pose_queue.find(_robot_this_th);
+        // 没有这个机器人的话建立一个新元组
         if(ite == _pose_queue.end()){
             std::vector< std::tuple<gtsam::Pose3, gtsam::Pose3, float> > new_pose_queue;
             std::vector< std::tuple<int, int, gtsam::Pose3> > new_loop_queue;
@@ -1088,10 +1096,10 @@ private:
 
         //perform pcm for all robot matches
 
-        Eigen::MatrixXi consistency_matrix = computePCMMatrix(_loop_queue[_robot_this_th]);//, _pose_queue[_robot_this_th]);
+        Eigen::MatrixXi consistency_matrix = computePCMMatrix(_loop_queue[_robot_this_th]);//, _pose_queue[_robot_this_th]); 计算四个变换矩阵残差值，计算成对一致性矩阵
         std::string consistency_matrix_file = _pcm_matrix_folder + "/consistency_matrix" + _robot_id + ".clq.mtx";
-        printPCMGraph(consistency_matrix, consistency_matrix_file);
-        // Compute maximum clique
+        printPCMGraph(consistency_matrix, consistency_matrix_file); //打印一致性矩阵
+        // Compute maximum clique 求解最大团问题
         FMC::CGraphIO gio;
         gio.readGraph(consistency_matrix_file);
         int max_clique_size = 0;
@@ -1277,8 +1285,8 @@ private:
         //publish transformation to the SLAM node
         nav_msgs::Odometry odom2map;
         odom2map.header.stamp = _cloud_header.stamp;
-        odom2map.header.frame_id = _robot_id + "/" + _sc_frame;
-        odom2map.child_frame_id = _robot_id + "/" + _sc_frame + "/odom2map";
+        odom2map.header.frame_id = _robot_id + "/" + _sc_frame; // _sc_frame <- base_link
+        odom2map.child_frame_id = _robot_id + "/" + _sc_frame + "/odom2map"; // _sc_frame <- base_link
         odom2map.pose.pose.position.x = _trans_to_publish.x;
         odom2map.pose.pose.position.y = _trans_to_publish.y;
         odom2map.pose.pose.position.z = _trans_to_publish.z;
